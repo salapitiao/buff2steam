@@ -10,14 +10,23 @@ description: 分析网易 BUFF → Steam 市场的"现金换 Steam 钱包余额"
 核心公式（全部按同一货币口径折算）：
 
 ```
-净到手(CNY) = Steam挂牌价(USD) × 0.85 × 汇率(USD→CNY)
-收益率      = 净到手(CNY) / BUFF最低价(CNY) − 1
-收益(CNY)   = 净到手(CNY) − BUFF最低价(CNY)
+实收(CNY) = Steam挂牌价(CNY) ÷ 1.15        # Steam 卖方实收 = 挂牌价/1.15（总费用约15%）
+收益率    = 实收(CNY) / BUFF最低价(CNY) − 1
+收益(CNY) = 实收(CNY) − BUFF最低价(CNY)
 ```
 
-- 0.85 = Steam 市场卖方手续费（含游戏费用后实际约 12%~15%，统一按 15% 估算）
 - 汇率默认 6.75，分析时先用 web 搜索确认当日中间价
 - 这是"现金 → Steam 钱包"的折价充值，不是可提现套利，输出时必须提醒
+
+## ⚠️ 头号陷阱：BUFF 的 steam_price 不可信（实测虚高 ~7%）
+
+2026-10 实测：BUFF 接口返回的 `steam_price` / `steam_price_cny` 是其内部参考价，**系统性高于 Steam 实际挂牌**（15 个箱子交叉验证，比值 0.86~1.02、均值 ≈0.93）。例：Revolution Case BUFF 报 $0.24(¥1.61)，实际 Steam 最低挂牌 ¥1.46（$0.21）。直接用会把收益率虚高 5~15 个百分点（如 +27% 报成 +42%）。
+
+**必须用真实 Steam 价**，来源 csgoskins.gg（可直连、与 Steam 盘口吻合）：
+- 箱子 URL 规律：小写、空格→`-`，如 `https://csgoskins.gg/items/revolution-case`。用 WebFetch 抓，prompt 要求输出 `Steam=$X.XX, offers=N`（offers=在售件数，用于供给判断）。
+- **皮肤/刀具 URL 规律不同，直接拼 slug 会 404**（`ak-47-redline-field-tested` 实测 404，站内搜索框跳转的同名 URL 也 404）。不要猜 URL；没拿到实价时用「BUFF steam_price × 0.93」估算并在表格里标注"估算"（±7% 波动足以翻转个位数收益率结论），下单前逐件人工核对 Steam 盘口。
+- curl 直连 csgoskins.gg 被 Cloudflare 拦（返回"Just a small moment"挑战页），只能用 WebFetch；WebFetch 并发 >1 会报 user concurrency limit exceeded，**只能串行、每次 1~2 个**。
+- Steam 盘口里买单价（buy order）才是"秒成交"价：实际操作是挂到买单价卖进深度。用户贴盘口（价格/数量/买单深度）时，直接用其数据重算，优先级最高。
 
 ## 数据获取（均已验证可用，无需登录 BUFF）
 
@@ -32,8 +41,8 @@ description: 分析网易 BUFF → Steam 市场的"现金换 Steam 钱包余额"
    - `data.items[0].price` → BUFF 最低在售价（CNY 字符串）
    - `data.total_count` → 在售总量（供给紧张度）
      ⚠️ 实测该值在 91 处截断：充足供给的物品全部显示 91，无法区分 91 和 9 万。只有当 total_count < 91（如 34）时才是真实的小供给信号，可以据此标注 ⚠️；等于 91 时不要当作"只有 91 件在售"来解读。
-   - `data.goods_infos["<id>"].steam_price` → Steam 挂牌价（USD）
-   - `data.goods_infos["<id>"].steam_price_cny` → BUFF 自己折算的 Steam 人民币价（可交叉验证）
+   - `data.goods_infos["<id>"].steam_price` → ⚠️ BUFF 内部参考价，虚高 ~7%，不可直接当 Steam 挂牌价（见上）
+   - `data.goods_infos["<id>"].steam_price_cny` → 同上，仅可作交叉验证参考
 
    注意：`/api/market/goods`（市场列表/搜索）需要登录，不要用它；sell_order 是免登录的。
 
@@ -49,7 +58,8 @@ description: 分析网易 BUFF → Steam 市场的"现金换 Steam 钱包余额"
 
 按收益率降序的表格，列：物品名、BUFF 价(¥)、Steam 挂牌($)、扣费折算(¥)、收益率。并补充：
 
-1. 收益率与单件绝对利润分开点评（低价箱比例高但单件赚得少）
-2. 在售量过小（<30）的物品标注 ⚠️，提示 BUFF 侧可能吃货困难或 Steam 侧有价无市
-3. 必须提醒：Steam 卖出所得为钱包余额不可提现；BUFF 买入后有 7~8 天交易冷却；汇率波动风险
-4. 若用户要"只看某类"（如只要武器箱），候选清单可以直接给箱子名单：Recoil、Kilowatt、Dreams & Nightmares、Snakebite、Revolution、Horizon、CS20、Falchion、Fracture、Prisma、Prisma 2、Chroma 1-3、Gamma 1-2、Shattered Web、Clutch、Spectrum、Shadow、Operation Breakout、Glove、Danger Zone、Recoil 等
+2. 收益率与单件绝对利润分开点评（低价箱比例高但单件赚得少）；**供给量同样是收益能否兑现的硬约束**——Steam 在售量极大（如 50 万件）说明挂单价会持续被压，只能卖进买单深度，点评里要点明
+3. 在售量过小（<30）的物品标注 ⚠️，提示 BUFF 侧可能吃货困难或 Steam 侧有价无市
+4. 表中每行标注数据置信度：Steam 价为实测（csgoskins.gg 或用户给的盘口）还是估算（×0.93），估算行的个位数收益率不可作为决策依据
+5. 必须提醒：Steam 卖出所得为钱包余额不可提现；BUFF 买入后有 7~8 天交易冷却；汇率波动风险
+6. 若用户要"只看某类"（如只要武器箱），候选清单可以直接给箱子名单：Recoil、Kilowatt、Dreams & Nightmares、Snakebite、Revolution、Horizon、CS20、Falchion、Fracture、Prisma、Prisma 2、Chroma 1-3、Gamma 1-2、Shattered Web、Clutch、Spectrum、Shadow、Operation Breakout、Glove、Danger Zone、Recoil 等
